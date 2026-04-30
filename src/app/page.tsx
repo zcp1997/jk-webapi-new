@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { nanoid } from 'nanoid';
 import clsx from 'clsx';
-import { Clock, Copy, FileJson, Folder, History, Moon, Plus, Save, Send, Sun, Trash2 } from 'lucide-react';
+import { Clock, Copy, FileJson, Folder, Moon, Plus, Save, Send, Sun, Trash2, ChevronDown, ChevronRight, Activity, X } from 'lucide-react';
 import { buildRequestData, DEFAULT_URL, encodeBase64Utf8, prettyJson, toMultipartFormData } from '@/lib/signature';
 import { defaultEndpoint, readHistory, readPresets, sampleDataTemplate, writeHistory, writePresets } from '@/lib/store';
 import type { EndpointNode, GeneratedRequestData, HistoryRecord, PresetNode, ProjectNode, WorkspaceForm } from '@/lib/types';
@@ -65,8 +65,33 @@ function replaceEndpoint(presets: PresetNode[], endpointId: string, form: Worksp
   });
 }
 
+function isJsonLike(text: string): boolean {
+  const trimmed = text.trim();
+  return (trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'));
+}
+
+function normalizeBase64(input: string): string {
+  const compact = input.trim().replace(/^data:[^,]+,/, '').replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/');
+  const padding = compact.length % 4;
+  return padding ? compact.padEnd(compact.length + 4 - padding, '=') : compact;
+}
+
+function decodeBase64Utf8(input: string): string | null {
+  if (!input.trim()) return '';
+
+  try {
+    const binary = atob(normalizeBase64(input));
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    const decoded = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    return isJsonLike(decoded) ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
 function getResponseText(body: string): string {
-  return prettyJson(body || '');
+  const decoded = decodeBase64Utf8(body);
+  return prettyJson(decoded ?? (body || ''));
 }
 
 async function tauriAwareFetch(url: string, init: RequestInit): Promise<Response> {
@@ -78,7 +103,7 @@ async function tauriAwareFetch(url: string, init: RequestInit): Promise<Response
 
 export default function Home() {
   const [mounted, setMounted] = useState(false);
-  const [dark, setDark] = useState(true);
+  const [dark, setDark] = useState(false);
   const [tab, setTab] = useState<SidebarTab>('presets');
   const [presets, setPresets] = useState<PresetNode[]>([]);
   const [history, setHistory] = useState<HistoryRecord[]>([]);
@@ -347,6 +372,15 @@ export default function Home() {
     setStatus('最终请求参数已复制');
   }
 
+  async function copyResponse() {
+    if (!response) {
+      setStatus('暂无响应结果可复制');
+      return;
+    }
+    await navigator.clipboard.writeText(response);
+    setStatus('响应结果 JSON 已复制');
+  }
+
   async function formatPayload() {
     updateForm('data', prettyJson(form.data));
   }
@@ -405,15 +439,23 @@ export default function Home() {
   }
 
   return (
-    <main className="relative flex h-screen overflow-hidden bg-slate-100 text-slate-950 dark:bg-panel-darker dark:text-slate-100">
-      <aside className="flex w-80 shrink-0 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-panel-dark">
-        <div className="flex items-center justify-between border-b border-slate-200 p-4 dark:border-slate-800">
-          <div>
-            <h1 className="text-base font-semibold">内部 API 推送工具</h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400">Tauri + Next.js</p>
+    <main className="relative flex h-screen overflow-hidden bg-slate-50 text-slate-900 dark:bg-[#0b0f18] dark:text-slate-200 selection:bg-indigo-500/30">
+      
+      {/* Sidebar */}
+      <aside className="flex w-72 lg:w-80 shrink-0 flex-col border-r border-slate-200/80 bg-white dark:border-white/5 dark:bg-[#111827] z-10 shadow-[4px_0_24px_rgba(0,0,0,0.02)] dark:shadow-none">
+        
+        <div className="flex items-center justify-between border-b border-slate-200/80 p-5 dark:border-white/5">
+          <div className="flex items-center gap-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white shadow-md shadow-indigo-600/20">
+              <Activity size={18} strokeWidth={2.5} />
+            </div>
+            <div>
+              <h1 className="text-[15px] font-semibold leading-tight tracking-tight text-slate-900 dark:text-slate-100">JKWEB API</h1>
+              <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Made By ZCP</p>
+            </div>
           </div>
           <button
-            className="rounded-lg border border-slate-200 p-2 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
+            className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-white/10 dark:hover:text-slate-100"
             onClick={() => setDark((value) => !value)}
             title="切换主题"
           >
@@ -421,48 +463,113 @@ export default function Home() {
           </button>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 p-3">
-          <button className={clsx('rounded-lg px-3 py-2 text-sm', tab === 'presets' ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800')} onClick={() => setTab('presets')}>预设配置</button>
-          <button className={clsx('rounded-lg px-3 py-2 text-sm', tab === 'history' ? 'bg-blue-600 text-white' : 'bg-slate-100 dark:bg-slate-800')} onClick={() => setTab('history')}>历史记录</button>
+        <div className="p-4 pb-2">
+          <div className="flex rounded-lg bg-slate-100/80 p-1 dark:bg-black/40 border border-slate-200/50 dark:border-white/5">
+            <button 
+              className={clsx('flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-200', tab === 'presets' ? 'bg-white text-slate-900 shadow-sm dark:bg-[#1f2937] dark:text-white' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300')} 
+              onClick={() => setTab('presets')}
+            >
+              预设配置
+            </button>
+            <button 
+              className={clsx('flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-all duration-200', tab === 'history' ? 'bg-white text-slate-900 shadow-sm dark:bg-[#1f2937] dark:text-white' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300')} 
+              onClick={() => setTab('history')}
+            >
+              历史记录
+            </button>
+          </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto px-3 pb-4">
+        <div className="min-h-0 flex-1 overflow-auto px-4 pb-4 custom-scrollbar">
           {tab === 'presets' ? (
-            <div className="space-y-3">
-              <input className="w-full rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none focus:border-blue-500 dark:border-slate-700" value={presetQuery} onChange={(event) => setPresetQuery(event.target.value)} placeholder="过滤项目 / 接口 / URL / AppKey" />
-              <button className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-slate-300 py-2 text-sm hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800" onClick={addProject}>
-                <Plus size={15} /> 新建项目
+            <div className="space-y-4">
+              <div className="relative flex items-center">
+                <input
+                  className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-3 pr-9 text-[13px] text-slate-900 shadow-sm outline-none transition-all placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-white/10 dark:bg-black/20 dark:text-slate-200 dark:focus:border-indigo-500/50" 
+                  value={presetQuery} 
+                  onChange={(event) => setPresetQuery(event.target.value)} 
+                  placeholder="过滤项目 / 接口 / URL..." 
+                />
+                
+                {presetQuery && (
+                  <button
+                    className="absolute right-2.5 flex h-5 w-5 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-300"
+                    onClick={() => setPresetQuery('')}
+                    title="清空搜索"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
+              </div>
+              
+              <button 
+                className="group flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50/50 py-2.5 text-[13px] font-medium text-slate-600 transition-colors hover:border-indigo-400 hover:bg-indigo-50 hover:text-indigo-600 dark:border-white/10 dark:bg-transparent dark:text-slate-400 dark:hover:border-indigo-500/50 dark:hover:bg-indigo-500/10 dark:hover:text-indigo-400" 
+                onClick={addProject}
+              >
+                <Plus size={14} className="transition-transform group-hover:scale-110" /> 新建项目
               </button>
-              {filteredPresets.length === 0 && <p className="rounded-lg border border-slate-200 p-4 text-center text-sm text-slate-500 dark:border-slate-800">无匹配的项目或接口</p>}
-              {filteredPresets.map((project) => project.type === 'project' && (
-                <section key={project.id} className="rounded-xl border border-slate-200 p-3 dark:border-slate-800">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-2 font-medium"><Folder size={16} className="shrink-0 text-amber-500" /><span className="truncate">{project.name}</span></div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <button className="rounded-md p-1 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => addEndpoint(project.id)} title="添加预设"><Plus size={15} /></button>
-                      <button className="rounded-md p-1 text-slate-500 hover:bg-slate-100 hover:text-red-500 dark:hover:bg-slate-800" onClick={() => requestDeleteProject(project.id)} title="删除项目"><Trash2 size={15} /></button>
-                    </div>
-                  </div>
-                  <div className="mt-2 space-y-1 pl-2">
-                    {project.children.map((endpoint) => (
-                      <div key={endpoint.id} className={clsx('group flex items-center justify-between rounded-lg px-2 py-2 text-sm', selectedEndpointId === endpoint.id ? 'bg-blue-600 text-white' : 'hover:bg-slate-100 dark:hover:bg-slate-800')}>
-                        <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => { setSelectedEndpointId(endpoint.id); setForm(endpointToForm(endpoint)); }}>
-                          <FileJson size={15} className="shrink-0" /><span className="truncate">{endpoint.name}</span>
-                        </button>
-                        <button className="opacity-70 hover:opacity-100" onClick={() => requestDeleteEndpoint(endpoint.id)} title="删除"><Trash2 size={14} /></button>
+              
+              {filteredPresets.length === 0 && <p className="py-8 text-center text-xs text-slate-500 dark:text-slate-500">空空如也</p>}
+              
+              <div className="space-y-3">
+                {filteredPresets.map((project) => project.type === 'project' && (
+                  <section key={project.id} className="rounded-xl border border-slate-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-[#161f30]">
+                    <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2.5 dark:border-white/5">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        <Folder size={14} className="shrink-0 text-indigo-500 dark:text-indigo-400" />
+                        <span className="truncate text-[13px] font-semibold text-slate-700 dark:text-slate-200">{project.name}</span>
                       </div>
-                    ))}
-                  </div>
-                </section>
-              ))}
+                      <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity hover:opacity-100">
+                        <button className="rounded p-1.5 hover:bg-slate-100 hover:text-indigo-600 dark:hover:bg-white/10 dark:hover:text-indigo-400" onClick={() => addEndpoint(project.id)} title="添加预设"><Plus size={14} /></button>
+                        <button className="rounded p-1.5 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400" onClick={() => requestDeleteProject(project.id)} title="删除项目"><Trash2 size={14} /></button>
+                      </div>
+                    </div>
+                    <div className="p-1.5 space-y-0.5">
+                      {project.children.map((endpoint) => (
+                        <div 
+                          key={endpoint.id} 
+                          className={clsx(
+                            'group flex items-center justify-between rounded-lg px-2.5 py-2 text-[13px] transition-colors', 
+                            selectedEndpointId === endpoint.id 
+                              ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300' 
+                              : 'text-slate-600 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-200'
+                          )}
+                        >
+                          <button className="flex min-w-0 flex-1 items-center gap-2.5 text-left outline-none" onClick={() => { setSelectedEndpointId(endpoint.id); setForm(endpointToForm(endpoint)); }}>
+                            <FileJson size={13} className={clsx("shrink-0", selectedEndpointId === endpoint.id ? "text-indigo-500" : "text-slate-400")} />
+                            <span className="truncate font-medium">{endpoint.name}</span>
+                          </button>
+                          <button className="shrink-0 p-1 text-slate-400 opacity-0 transition-all hover:text-red-500 group-hover:opacity-100" onClick={() => requestDeleteEndpoint(endpoint.id)} title="删除">
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
             </div>
           ) : (
-            <div className="space-y-2">
-              {history.length === 0 && <p className="p-4 text-center text-sm text-slate-500">暂无历史记录</p>}
+            <div className="space-y-2.5">
+              {history.length === 0 && <p className="py-8 text-center text-xs text-slate-500">暂无历史记录</p>}
               {history.map((record) => (
-                <button key={record.id} className="w-full rounded-xl border border-slate-200 p-3 text-left text-sm hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800" onClick={() => loadHistory(record)}>
-                  <div className="flex items-center justify-between gap-2"><span className="truncate font-medium">{record.presetName}</span><span className="text-xs text-slate-500">{record.responseCode ?? 'ERR'}</span></div>
-                  <div className="mt-1 flex items-center gap-1 text-xs text-slate-500"><Clock size={13} /> {new Date(record.requestTime).toLocaleString()}</div>
+                <button 
+                  key={record.id} 
+                  className="w-full rounded-xl border border-slate-200 bg-white p-3.5 text-left shadow-sm transition-all hover:border-indigo-300 hover:shadow-md dark:border-white/5 dark:bg-[#161f30] dark:hover:border-indigo-500/50" 
+                  onClick={() => loadHistory(record)}
+                >
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <span className="truncate text-[13px] font-semibold text-slate-800 dark:text-slate-200">{record.presetName}</span>
+                    <span className={clsx(
+                      "rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wider", 
+                      record.responseCode && record.responseCode < 300 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400" : "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400"
+                    )}>
+                      {record.responseCode ?? 'ERR'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                    <Clock size={12} /> {new Date(record.requestTime).toLocaleString()}
+                  </div>
                 </button>
               ))}
             </div>
@@ -470,85 +577,189 @@ export default function Home() {
         </div>
       </aside>
 
-      <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <header className="flex gap-3 border-b border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-panel-dark">
-          <input className="min-w-0 flex-1 rounded-xl border border-slate-300 bg-white px-4 py-2 font-mono text-sm outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950" value={form.url} onChange={(event) => updateForm('url', event.target.value)} placeholder="目标 URL" />
-          <button className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2 font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60" onClick={sendRequest} disabled={sending || !form.url || !form.appkey}>
-            <Send size={17} /> {sending ? '发送中' : '发送'}
+      {/* Main Workspace */}
+      <section className="flex min-w-0 flex-1 flex-col overflow-hidden bg-slate-50/50 dark:bg-[#0b0f18]">
+        
+        {/* Top Request Bar */}
+        <header className="flex shrink-0 items-center gap-3 border-b border-slate-200/80 bg-white px-6 py-4 shadow-sm dark:border-white/5 dark:bg-[#111827]">
+          <div className="flex h-10 items-center rounded-xl bg-slate-100 px-3 text-[13px] font-bold text-indigo-600 dark:bg-black/40 dark:text-indigo-400 border border-transparent dark:border-white/5">
+            POST
+          </div>
+          <div className="relative min-w-0 flex-1">
+            <input 
+              className="h-10 w-full rounded-xl border border-slate-200 bg-white pl-4 pr-4 font-mono text-[13px] text-slate-900 shadow-sm outline-none transition-all focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-white/10 dark:bg-[#0b0f18] dark:text-slate-200" 
+              value={form.url} 
+              onChange={(event) => updateForm('url', event.target.value)} 
+              placeholder="https://api.example.com/endpoint" 
+            />
+          </div>
+          <button 
+            className="flex h-10 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-6 text-[13px] font-semibold text-white shadow-md shadow-indigo-600/20 transition-all hover:bg-indigo-500 hover:shadow-lg hover:shadow-indigo-600/30 active:scale-95 disabled:pointer-events-none disabled:opacity-50" 
+            onClick={sendRequest} 
+            disabled={sending || !form.url || !form.appkey}
+          >
+            <Send size={15} className={clsx(sending && "animate-pulse")} /> 
+            {sending ? 'Sending...' : 'Send'}
           </button>
         </header>
 
-        <div className="grid min-h-0 flex-1 grid-cols-2 gap-4 overflow-hidden p-4">
-          <section className="flex min-h-0 flex-col gap-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-panel-dark">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="font-semibold">基础参数</h2>
-                <button className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-sm hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800" onClick={saveCurrentPreset}><Save size={15} />保存预设</button>
+        {/* Workspace Grid */}
+        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-2 gap-6 overflow-hidden p-6 custom-scrollbar">
+          
+          {/* Left Column: Request Params */}
+          <section className="flex min-h-0 flex-col gap-6">
+            
+            <div className="rounded-2xl border border-slate-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-[#111827]">
+              <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5 dark:border-white/5">
+                <h2 className="text-[13px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">Base Parameters</h2>
+                <button 
+                  className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 transition-all hover:bg-slate-50 hover:text-indigo-600 dark:border-white/10 dark:bg-black/20 dark:text-slate-300 dark:hover:bg-white/5 dark:hover:text-indigo-400" 
+                  onClick={saveCurrentPreset}
+                >
+                  <Save size={13} /> 保存至预设
+                </button>
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <label className="space-y-1 text-sm"><span className="text-slate-500">AppKey *</span><input className="w-full rounded-lg border border-slate-300 bg-transparent px-3 py-2 outline-none focus:border-blue-500 dark:border-slate-700" value={form.appkey} onChange={(event) => updateForm('appkey', event.target.value)} /></label>
-                <label className="space-y-1 text-sm"><span className="text-slate-500">Password（本地签名）</span><input className="w-full rounded-lg border border-slate-300 bg-transparent px-3 py-2 outline-none focus:border-blue-500 dark:border-slate-700" value={form.password} onChange={(event) => updateForm('password', event.target.value)} /></label>
-                <label className="space-y-1 text-sm"><span className="text-slate-500">Version</span><input className="w-full rounded-lg border border-slate-300 bg-transparent px-3 py-2 outline-none focus:border-blue-500 dark:border-slate-700" value={form.ver} onChange={(event) => updateForm('ver', event.target.value)} /></label>
-                <div className="space-y-1 text-sm"><span className="text-slate-500">当前预设</span><div className="truncate rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-700">{selectedMeta ? `${selectedMeta.project.name} / ${selectedMeta.endpoint.name}` : '临时请求'}</div></div>
+              <div className="grid grid-cols-2 gap-5 p-5">
+                <label className="space-y-1.5">
+                  <span className="block text-[12px] font-semibold text-slate-500 dark:text-slate-400">AppKey</span>
+                  <input className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[13px] outline-none transition-all focus:border-indigo-500 focus:bg-white focus:ring-1 focus:ring-indigo-500 dark:border-white/10 dark:bg-black/20 dark:focus:border-indigo-500/80 dark:focus:bg-[#0b0f18]" value={form.appkey} onChange={(event) => updateForm('appkey', event.target.value)} />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="block text-[12px] font-semibold text-slate-500 dark:text-slate-400">Password</span>
+                  <input type="password" placeholder="••••••••" className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[13px] outline-none transition-all focus:border-indigo-500 focus:bg-white focus:ring-1 focus:ring-indigo-500 dark:border-white/10 dark:bg-black/20 dark:focus:border-indigo-500/80 dark:focus:bg-[#0b0f18]" value={form.password} onChange={(event) => updateForm('password', event.target.value)} />
+                </label>
+                <label className="space-y-1.5">
+                  <span className="block text-[12px] font-semibold text-slate-500 dark:text-slate-400">Version</span>
+                  <input className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-[13px] outline-none transition-all focus:border-indigo-500 focus:bg-white focus:ring-1 focus:ring-indigo-500 dark:border-white/10 dark:bg-black/20 dark:focus:border-indigo-500/80 dark:focus:bg-[#0b0f18]" value={form.ver} onChange={(event) => updateForm('ver', event.target.value)} />
+                </label>
+                <div className="space-y-1.5">
+                  <span className="block text-[12px] font-semibold text-slate-500 dark:text-slate-400">当前关联</span>
+                  <div className="flex h-[42px] items-center truncate rounded-xl border border-dashed border-slate-300 bg-slate-50/50 px-3 text-[13px] font-medium text-slate-700 dark:border-white/10 dark:bg-black/10 dark:text-slate-300">
+                    {selectedMeta ? `${selectedMeta.project.name} / ${selectedMeta.endpoint.name}` : '临时请求'}
+                  </div>
+                </div>
               </div>
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-panel-dark">
-              <div className="mb-3 flex items-center justify-between"><h2 className="font-semibold">Payload 明文 JSON</h2><button className="rounded-lg border border-slate-200 px-3 py-1.5 text-sm hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800" onClick={formatPayload}>格式化</button></div>
-              <textarea className="min-h-0 flex-1 resize-none rounded-xl border border-slate-300 bg-slate-50 p-3 font-mono text-sm outline-none focus:border-blue-500 dark:border-slate-700 dark:bg-slate-950" value={form.data} onChange={(event) => updateForm('data', event.target.value)} spellCheck={false} />
+            <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-[#111827]">
+              <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3.5 dark:border-white/5">
+                <h2 className="text-[13px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">Payload JSON</h2>
+                <button className="text-[12px] font-semibold text-indigo-600 transition-colors hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300" onClick={formatPayload}>格式化 (Prettier)</button>
+              </div>
+              <textarea 
+                className="min-h-0 flex-1 resize-none bg-slate-50/50 p-5 font-mono text-[13px] leading-relaxed text-slate-800 outline-none transition-colors focus:bg-white dark:bg-[#0b0f18]/50 dark:text-slate-300 dark:focus:bg-[#0b0f18] rounded-b-2xl" 
+                value={form.data} 
+                onChange={(event) => updateForm('data', event.target.value)} 
+                spellCheck={false} 
+              />
             </div>
+
           </section>
 
-          <section className="flex min-h-0 flex-col gap-4">
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-panel-dark">
-              <div className="mb-3 flex items-center justify-between"><h2 className="font-semibold">最终请求参数预览</h2><button className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-sm hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800" onClick={copyGenerated}><Copy size={15} />复制</button></div>
-              <pre className="max-h-56 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-green-200">{JSON.stringify(generated ?? liveRequestPreview ?? { appkey: form.appkey, timestamp: '客户端生成中...', data: base64Preview, sign: '客户端生成中...', ver: form.ver || '1' }, null, 2)}</pre>
-              <div className="mt-3 text-xs text-slate-500">签名规则：MD5(timestamp + Base64(data) + password)，timestamp 为 yyyyMMddHHmmss 14 位本地时间。发送格式：multipart/form-data。</div>
+          {/* Right Column: Previews & Response */}
+          <section className="flex min-h-0 flex-col gap-6">
+            
+            <div className="rounded-2xl border border-slate-200/80 bg-slate-900 shadow-sm dark:border-white/5 dark:bg-[#111827] flex flex-col">
+              <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
+                <h2 className="text-[13px] font-bold uppercase tracking-wider text-slate-100">最终请求预览</h2>
+                <button 
+                  className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-slate-400 transition-colors hover:bg-white/10 hover:text-white" 
+                  onClick={copyGenerated}
+                >
+                  <Copy size={13} /> Copy
+                </button>
+              </div>
+              <pre className="max-h-48 overflow-auto p-5 font-mono text-[12px] leading-relaxed text-emerald-400 custom-scrollbar">
+                {JSON.stringify(generated ?? liveRequestPreview ?? { appkey: form.appkey, timestamp: '...', data: base64Preview, sign: '...', ver: form.ver || '1' }, null, 2)}
+              </pre>
+              <div className="border-t border-white/5 bg-black/20 px-5 py-3 text-[11px] font-medium leading-relaxed text-slate-400 rounded-b-2xl">
+                规则: <span className="text-slate-300">MD5(timestamp + Base64(data) + password)</span><br/>
+                格式: <span className="text-slate-300">multipart/form-data</span>
+              </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-panel-dark">
-              <button className="flex w-full items-center justify-between text-left" onClick={() => setShowBase64Preview((value) => !value)}>
-                <h2 className="font-semibold">Base64 Data 预览</h2>
-                <span className="text-xs text-slate-500">{showBase64Preview ? '收起' : '展开'}</span>
+            <div className="rounded-2xl border border-slate-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-[#111827]">
+              <button 
+                className="flex w-full items-center justify-between px-5 py-4 text-left outline-none" 
+                onClick={() => setShowBase64Preview((value) => !value)}
+              >
+                <h2 className="text-[13px] font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">Base64 Data 预览</h2>
+                {showBase64Preview ? <ChevronDown size={16} className="text-slate-400" /> : <ChevronRight size={16} className="text-slate-400" />}
               </button>
-              {showBase64Preview && <textarea className="mt-3 h-28 w-full resize-none rounded-xl border border-slate-300 bg-slate-50 p-3 font-mono text-xs outline-none dark:border-slate-700 dark:bg-slate-950" value={base64Preview} readOnly />}
+              {showBase64Preview && (
+                <div className="border-t border-slate-100 px-5 pb-5 pt-4 dark:border-white/5">
+                  <textarea 
+                    className="h-24 w-full resize-none rounded-xl border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] text-slate-600 outline-none dark:border-white/10 dark:bg-[#0b0f18] dark:text-slate-400" 
+                    value={base64Preview} 
+                    readOnly 
+                  />
+                </div>
+              )}
             </div>
 
-            <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-panel-dark">
-              <div className="mb-3 flex items-center justify-between"><h2 className="font-semibold">响应结果</h2><span className={clsx('rounded-full px-2 py-1 text-xs', responseCode && responseCode < 300 ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300')}>{responseCode ?? '未发送'}</span></div>
-              <pre className="min-h-0 flex-1 overflow-auto rounded-xl bg-slate-950 p-3 text-xs text-slate-100">{response || '等待发送请求...'}</pre>
+            <div className="flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-200/80 bg-slate-900 shadow-sm dark:border-white/5 dark:bg-[#111827]">
+              <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
+                <div className="flex items-center gap-3">
+                  <h2 className="text-[13px] font-bold uppercase tracking-wider text-slate-100">响应结果</h2>
+                  {responseCode && (
+                    <span className={clsx('rounded px-2 py-0.5 text-[11px] font-bold tracking-wider', responseCode < 300 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400')}>
+                      HTTP {responseCode}
+                    </span>
+                  )}
+                </div>
+                <button 
+                  className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-slate-400 transition-colors hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:opacity-30" 
+                  onClick={copyResponse} 
+                  disabled={!response} 
+                  title="复制 JSON"
+                >
+                  <Copy size={13} /> Copy
+                </button>
+              </div>
+              <pre className="min-h-0 flex-1 overflow-auto p-5 font-mono text-[13px] leading-relaxed text-slate-300 custom-scrollbar rounded-b-2xl">
+                {response || <span className="text-slate-600">等待发送请求...</span>}
+              </pre>
             </div>
+
           </section>
         </div>
 
-        <footer className="flex items-center justify-between border-t border-slate-200 bg-white px-4 py-2 text-xs text-slate-500 dark:border-slate-800 dark:bg-panel-dark">
-          <span>{status}</span>
+        {/* Status Footer */}
+        <footer className="flex shrink-0 items-center justify-between border-t border-slate-200/80 bg-white px-6 py-2.5 text-[12px] font-medium text-slate-500 dark:border-white/5 dark:bg-[#111827] dark:text-slate-400 z-10 shadow-[0_-4px_24px_rgba(0,0,0,0.02)] dark:shadow-none">
+          <div className="flex items-center gap-2">
+            <span className="relative flex h-2 w-2">
+              {sending && <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-indigo-400 opacity-75"></span>}
+              <span className={clsx("relative inline-flex h-2 w-2 rounded-full", sending ? "bg-indigo-500" : (responseCode && responseCode < 300 ? "bg-emerald-500" : "bg-slate-400 dark:bg-slate-600"))}></span>
+            </span>
+            {status}
+          </div>
           <span>Content-Type: multipart/form-data</span>
         </footer>
       </section>
 
+      {/* Dialogs */}
       {deleteDialog && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-panel-dark">
-            <h2 className="text-lg font-semibold text-red-600 dark:text-red-400">{deleteDialog.title}</h2>
-            <p className="mt-4 text-sm leading-6 text-slate-600 dark:text-slate-300">{deleteDialog.message}</p>
-            <div className="mt-5 flex justify-end gap-2">
-              <button className="rounded-lg border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800" onClick={() => setDeleteDialog(null)}>取消</button>
-              <button className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500" onClick={() => void confirmDelete()}>{deleteDialog.confirmText}</button>
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm transition-all dark:bg-black/60">
+          <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-[#161f30] animate-in fade-in zoom-in-95 duration-200">
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">{deleteDialog.title}</h2>
+            <p className="mt-3 text-[14px] leading-relaxed text-slate-600 dark:text-slate-400">{deleteDialog.message}</p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button className="rounded-xl px-4 py-2 text-[13px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10" onClick={() => setDeleteDialog(null)}>取消</button>
+              <button className="rounded-xl bg-red-600 px-4 py-2 text-[13px] font-semibold text-white shadow-md shadow-red-600/20 transition-all hover:bg-red-500 active:scale-95" onClick={() => void confirmDelete()}>{deleteDialog.confirmText}</button>
             </div>
           </div>
         </div>
       )}
 
       {createDialog && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl dark:border-slate-700 dark:bg-panel-dark">
-            <h2 className="text-lg font-semibold">{createDialog.title}</h2>
-            <label className="mt-4 block space-y-2 text-sm">
-              <span className="text-slate-500">{createDialog.label}</span>
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-sm transition-all dark:bg-black/60">
+          <div className="w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-white/10 dark:bg-[#161f30] animate-in fade-in zoom-in-95 duration-200">
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white">{createDialog.title}</h2>
+            <label className="mt-5 block space-y-2 text-sm">
+              <span className="text-[13px] font-semibold text-slate-600 dark:text-slate-400">{createDialog.label}</span>
               <input
                 autoFocus
-                className="w-full rounded-xl border border-slate-300 bg-transparent px-3 py-2 outline-none focus:border-blue-500 dark:border-slate-700"
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-[14px] outline-none transition-all focus:border-indigo-500 focus:bg-white focus:ring-2 focus:ring-indigo-500/20 dark:border-white/10 dark:bg-black/20 dark:text-white dark:focus:border-indigo-500/80 dark:focus:bg-[#0b0f18]"
                 value={createName}
                 onChange={(event) => setCreateName(event.target.value)}
                 onKeyDown={(event) => {
@@ -557,9 +768,9 @@ export default function Home() {
                 }}
               />
             </label>
-            <div className="mt-5 flex justify-end gap-2">
-              <button className="rounded-lg border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800" onClick={() => setCreateDialog(null)}>取消</button>
-              <button className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-500" onClick={() => void confirmCreate()}>确认创建</button>
+            <div className="mt-6 flex justify-end gap-3">
+              <button className="rounded-xl px-4 py-2 text-[13px] font-semibold text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/10" onClick={() => setCreateDialog(null)}>取消</button>
+              <button className="rounded-xl bg-indigo-600 px-4 py-2 text-[13px] font-semibold text-white shadow-md shadow-indigo-600/20 transition-all hover:bg-indigo-500 active:scale-95" onClick={() => void confirmCreate()}>确认创建</button>
             </div>
           </div>
         </div>

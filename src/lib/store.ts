@@ -7,18 +7,18 @@ const PRESETS_KEY = 'presets';
 const HISTORY_KEY = 'history';
 
 export const sampleDataTemplate = `{
-  "接口类型": "温湿度推送",
-  "接收系统标识": "WMS_01",
+  "接口类型": "入库单",
+  "接收系统标识": "JKWMS",
   "接口数据": {}
 }`;
 
 export const defaultEndpoint: EndpointNode = {
   id: 'preset_1',
-  name: '温湿度推送测试',
+  name: '入库单',
   type: 'endpoint',
   url: DEFAULT_URL,
-  appkey: 'wms_test',
-  password: 'your_db_app_password',
+  appkey: '1',
+  password: '1',
   ver: '1',
   dataTemplate: sampleDataTemplate
 };

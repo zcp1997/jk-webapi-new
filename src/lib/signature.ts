@@ -33,7 +33,7 @@ export function decodeBase64Utf8(input: string): string {
 }
 
 export function createSign(timestamp: string, base64Data: string, password: string): string {
-  return MD5(Utf8.parse(`${timestamp}${base64Data}${password}`)).toString();
+  return MD5(Utf8.parse(`${timestamp}${base64Data}${password}`)).toString().toUpperCase();
 }
 
 export function buildRequestData(form: WorkspaceForm, timestamp = generateTimestamp()): GeneratedRequestData {
