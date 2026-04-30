@@ -1,7 +1,7 @@
 {
   "identifier": "com.internal.api.push-tool",
   "productName": "Internal API Push Tool",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "build": {
     "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",

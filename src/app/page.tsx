@@ -327,6 +327,7 @@ export default function Home() {
   const [status, setStatus] = useState('就绪');
   const [liveRequestPreview, setLiveRequestPreview] = useState<GeneratedRequestData | null>(null);
   const [showBase64Preview, setShowBase64Preview] = useState(false);
+  const [truncateDataField, setTruncateDataField] = useState(true);
   const [presetQuery, setPresetQuery] = useState('');
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null);
   const [createName, setCreateName] = useState('');
@@ -394,6 +395,20 @@ export default function Home() {
   );
 
   const base64Preview = useMemo(() => encodeBase64Utf8(form.data), [form.data]);
+
+  const previewData = useMemo(() => {
+    const data = generated ?? liveRequestPreview;
+    if (!data) return null;
+
+    if (!truncateDataField || data.data.length <= 100) {
+      return data;
+    }
+
+    return {
+      ...data,
+      data: data.data.slice(0, 100) + `... (${data.data.length - 100} more chars)`
+    };
+  }, [generated, liveRequestPreview, truncateDataField]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -630,14 +645,20 @@ export default function Home() {
       setResponse(getResponseText(body));
       setStatus(code >= 200 && code < 300 ? '发送完成' : `请求返回 HTTP ${code}`);
     } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
       if (error instanceof Error && error.name === 'AbortError') {
         code = null;
         body = `请求超时：后端接口在 ${REQUEST_TIMEOUT_MS / 1000} 秒内未响应，请检查网络连接或联系后端确认接口状态`;
         setResponseCode(null);
         setResponse(body);
         setStatus('请求超时');
+      } else if (/error sending request|fetch failed|networkerror|ECONNREFUSED|ENOTFOUND|Failed to fetch|NetworkError/i.test(msg)) {
+        body = `连接失败：无法连接到 ${form.url}\n\n可能原因：\n1. 后端服务未启动或已崩溃\n2. 请求地址或端口号错误\n3. 网络不通或被防火墙拦截\n\n原始错误：${msg}`;
+        setResponseCode(null);
+        setResponse(body);
+        setStatus('连接失败');
       } else {
-        body = error instanceof Error ? error.message : String(error);
+        body = `请求异常：${msg}`;
         setResponse(body);
         setStatus('发送失败');
       }
@@ -819,7 +840,7 @@ export default function Home() {
                         key={project.id}
                         project={project}
                         selectedEndpointId={selectedEndpointId}
-                        onSelectEndpoint={(endpoint) => { setSelectedEndpointId(endpoint.id); setForm(endpointToForm(endpoint)); }}
+                        onSelectEndpoint={(endpoint) => { setSelectedEndpointId(endpoint.id); setForm(endpointToForm(endpoint)); setGenerated(null); }}
                         onAddEndpoint={addEndpoint}
                         onRequestDeleteProject={requestDeleteProject}
                         onRequestDeleteEndpoint={requestDeleteEndpoint}
@@ -979,11 +1000,20 @@ export default function Home() {
                 </button>
               </div>
               <pre className="max-h-48 overflow-auto p-5 font-mono text-[12px] leading-relaxed text-emerald-400 custom-scrollbar">
-                {JSON.stringify(generated ?? liveRequestPreview ?? { appkey: form.appkey, timestamp: '...', data: base64Preview, sign: '...', ver: form.ver || '1' }, null, 2)}
+                {JSON.stringify(previewData ?? { appkey: form.appkey, timestamp: '...', data: base64Preview, sign: '...', ver: form.ver || '1' }, null, 2)}
               </pre>
-              <div className="border-t border-white/5 bg-black/20 px-5 py-3 text-[11px] font-medium leading-relaxed text-slate-400 rounded-b-2xl">
-                规则: <span className="text-slate-300">MD5(timestamp + Base64(data) + password)</span><br/>
-                格式: <span className="text-slate-300">multipart/form-data</span>
+              <div className="border-t border-white/5 bg-black/20 px-5 py-3 text-[11px] font-medium leading-relaxed text-slate-400 rounded-b-2xl flex items-start justify-between gap-3">
+                <div>
+                  规则: <span className="text-slate-300">MD5(timestamp + Base64(data) + password)</span><br/>
+                  格式: <span className="text-slate-300">multipart/form-data</span>
+                </div>
+                <button
+                  className="shrink-0 rounded-md px-2 py-0.5 text-[11px] font-medium text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-300"
+                  onClick={() => setTruncateDataField((v) => !v)}
+                  title={truncateDataField ? '展开完整 data 字段' : '收起 data 字段'}
+                >
+                  data: {truncateDataField ? '截断' : '完整'}
+                </button>
               </div>
             </div>
 
