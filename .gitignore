@@ -16,6 +16,8 @@ out
 .env
 src-tauri/target
 src-tauri/gen
+package-lock.json
+tsconfig.tsbuildinfo
 
 # Editor directories and files
 .vscode/*

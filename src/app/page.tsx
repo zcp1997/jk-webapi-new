@@ -1,13 +1,101 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 import { nanoid } from 'nanoid';
 import clsx from 'clsx';
-import { Clock, Copy, FileJson, Folder, Moon, Plus, Save, Send, Sun, Trash2, ChevronDown, ChevronRight, Activity, X } from 'lucide-react';
+import { Clock, Copy, FileJson, Folder, Moon, Plus, Save, Send, Sun, Trash2, ChevronDown, ChevronRight, Activity, X, GripVertical } from 'lucide-react';
 import { buildRequestData, DEFAULT_URL, encodeBase64Utf8, prettyJson, toMultipartFormData } from '@/lib/signature';
 import { defaultEndpoint, readHistory, readPresets, sampleDataTemplate, writeHistory, writePresets } from '@/lib/store';
 import type { EndpointNode, GeneratedRequestData, HistoryRecord, PresetNode, ProjectNode, WorkspaceForm } from '@/lib/types';
+import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent, DragOverlay, DragStartEvent } from '@dnd-kit/core';
+import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+
+type EditableTextProps = {
+  value: string;
+  onSave: (newValue: string) => void;
+  className?: string;
+  inputClassName?: string;
+  placeholder?: string;
+};
+
+function EditableText({ value, onSave, className, inputClassName, placeholder }: EditableTextProps) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState(value);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setEditValue(value);
+  }, [value]);
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+
+  function startEdit() {
+    setIsEditing(true);
+    setEditValue(value);
+  }
+
+  function commitEdit() {
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== value) {
+      onSave(trimmed);
+    } else {
+      setEditValue(value);
+    }
+    setIsEditing(false);
+  }
+
+  function cancelEdit() {
+    setEditValue(value);
+    setIsEditing(false);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitEdit();
+    } else if (e.key === 'Escape') {
+      cancelEdit();
+    }
+  }
+
+  if (isEditing) {
+    return (
+      <input
+        ref={inputRef}
+        value={editValue}
+        onChange={(e) => setEditValue(e.target.value)}
+        onBlur={commitEdit}
+        onKeyDown={handleKeyDown}
+        className={clsx(
+          'min-w-0 bg-transparent outline-none ring-1 ring-indigo-500 rounded px-1 -mx-1',
+          inputClassName
+        )}
+        placeholder={placeholder}
+        onClick={(e) => e.stopPropagation()}
+      />
+    );
+  }
+
+  return (
+    <span
+      className={className}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        startEdit();
+      }}
+      title="双击编辑"
+    >
+      {value || placeholder}
+    </span>
+  );
+}
 
 type SidebarTab = 'presets' | 'history';
 type CreateDialogState =
@@ -94,11 +182,134 @@ function getResponseText(body: string): string {
   return prettyJson(decoded ?? (body || ''));
 }
 
-async function tauriAwareFetch(url: string, init: RequestInit): Promise<Response> {
-  if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
-    return tauriFetch(url, init);
+const REQUEST_TIMEOUT_MS = 10000;
+
+async function tauriAwareFetch(url: string, init: RequestInit, timeoutMs: number = REQUEST_TIMEOUT_MS): Promise<Response> {
+  const isTauriEnv = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+  const fetchFn = isTauriEnv ? tauriFetch : fetch;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetchFn(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return fetch(url, init);
+}
+
+type SortableProjectProps = {
+  project: ProjectNode;
+  selectedEndpointId: string | null;
+  onSelectEndpoint: (endpoint: EndpointNode) => void;
+  onAddEndpoint: (projectId: string) => void;
+  onRequestDeleteProject: (projectId: string) => void;
+  onRequestDeleteEndpoint: (endpointId: string) => void;
+  onReorderEndpoints: (projectId: string, activeId: string, overId: string) => void;
+  isDraggingEndpoint: string | null;
+  onRenameProject: (projectId: string, newName: string) => void;
+};
+
+function SortableProject({ project, selectedEndpointId, onSelectEndpoint, onAddEndpoint, onRequestDeleteProject, onRequestDeleteEndpoint, onReorderEndpoints, isDraggingEndpoint, onRenameProject }: SortableProjectProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: project.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
+
+  return (
+    <section ref={setNodeRef} style={style} className={clsx('rounded-xl border border-slate-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-[#161f30]', isDragging && 'shadow-lg ring-2 ring-indigo-500/50')}>
+      <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2.5 dark:border-white/5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <button {...attributes} {...listeners} className="cursor-grab p-1 text-slate-400 hover:text-slate-600 active:cursor-grabbing dark:hover:text-slate-300">
+            <GripVertical size={14} />
+          </button>
+          <Folder size={14} className="shrink-0 text-indigo-500 dark:text-indigo-400" />
+          <EditableText
+            value={project.name}
+            onSave={(newName) => onRenameProject(project.id, newName)}
+            className="truncate text-[13px] font-semibold text-slate-700 dark:text-slate-200 cursor-text"
+            inputClassName="text-[13px] font-semibold text-slate-700 dark:text-slate-200"
+          />
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity hover:opacity-100">
+          <button className="rounded p-1.5 hover:bg-slate-100 hover:text-indigo-600 dark:hover:bg-white/10 dark:hover:text-indigo-400" onClick={() => onAddEndpoint(project.id)} title="添加预设"><Plus size={14} /></button>
+          <button className="rounded p-1.5 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400" onClick={() => onRequestDeleteProject(project.id)} title="删除项目"><Trash2 size={14} /></button>
+        </div>
+      </div>
+      <div className="p-1.5 space-y-0.5">
+        <SortableContext items={project.children.map(e => e.id)} strategy={verticalListSortingStrategy}>
+          {project.children.map((endpoint) => (
+            <SortableEndpoint
+              key={endpoint.id}
+              endpoint={endpoint}
+              selectedEndpointId={selectedEndpointId}
+              onSelectEndpoint={onSelectEndpoint}
+              onRequestDeleteEndpoint={onRequestDeleteEndpoint}
+              isDragging={isDraggingEndpoint === endpoint.id}
+              onRenameEndpoint={onRenameProject}
+            />
+          ))}
+        </SortableContext>
+      </div>
+    </section>
+  );
+}
+
+type SortableEndpointProps = {
+  endpoint: EndpointNode;
+  selectedEndpointId: string | null;
+  onSelectEndpoint: (endpoint: EndpointNode) => void;
+  onRequestDeleteEndpoint: (endpointId: string) => void;
+  isDragging: boolean;
+  onRenameEndpoint: (endpointId: string, newName: string) => void;
+};
+
+function SortableEndpoint({ endpoint, selectedEndpointId, onSelectEndpoint, onRequestDeleteEndpoint, isDragging, onRenameEndpoint }: SortableEndpointProps) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging: isThisDragging } = useSortable({ id: endpoint.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isThisDragging ? 0.5 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={clsx(
+        'group flex items-center justify-between rounded-lg px-2.5 py-2 text-[13px] transition-colors',
+        selectedEndpointId === endpoint.id
+          ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300'
+          : 'text-slate-600 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-200',
+        isThisDragging && 'shadow-md ring-1 ring-indigo-500/30'
+      )}
+    >
+      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+        <button {...attributes} {...listeners} className="cursor-grab p-0.5 text-slate-400 opacity-0 group-hover:opacity-100 hover:text-slate-600 active:cursor-grabbing dark:hover:text-slate-300">
+          <GripVertical size={12} />
+        </button>
+        <button className="flex min-w-0 flex-1 items-center gap-2.5 text-left outline-none" onClick={() => onSelectEndpoint(endpoint)}>
+          <FileJson size={13} className={clsx("shrink-0", selectedEndpointId === endpoint.id ? "text-indigo-500" : "text-slate-400")} />
+          <EditableText
+            value={endpoint.name}
+            onSave={(newName) => onRenameEndpoint(endpoint.id, newName)}
+            className="truncate font-medium cursor-text"
+            inputClassName="font-medium text-slate-700 dark:text-slate-200"
+          />
+        </button>
+      </div>
+      <button className="shrink-0 p-1 text-slate-400 opacity-0 transition-all hover:text-red-500 group-hover:opacity-100" onClick={() => onRequestDeleteEndpoint(endpoint.id)} title="删除">
+        <Trash2 size={13} />
+      </button>
+    </div>
+  );
 }
 
 export default function Home() {
@@ -120,6 +331,19 @@ export default function Home() {
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null);
   const [createName, setCreateName] = useState('');
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [activeEndpointId, setActiveEndpointId] = useState<string | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
 
   useEffect(() => {
     setMounted(true);
@@ -406,9 +630,17 @@ export default function Home() {
       setResponse(getResponseText(body));
       setStatus(code >= 200 && code < 300 ? '发送完成' : `请求返回 HTTP ${code}`);
     } catch (error) {
-      body = error instanceof Error ? error.message : String(error);
-      setResponse(body);
-      setStatus('发送失败');
+      if (error instanceof Error && error.name === 'AbortError') {
+        code = null;
+        body = `请求超时：后端接口在 ${REQUEST_TIMEOUT_MS / 1000} 秒内未响应，请检查网络连接或联系后端确认接口状态`;
+        setResponseCode(null);
+        setResponse(body);
+        setStatus('请求超时');
+      } else {
+        body = error instanceof Error ? error.message : String(error);
+        setResponse(body);
+        setStatus('发送失败');
+      }
     } finally {
       const presetName = selectedMeta ? `${selectedMeta.project.name} - ${selectedMeta.endpoint.name}` : '未关联预设';
       const record: HistoryRecord = {
@@ -436,6 +668,69 @@ export default function Home() {
     setResponseCode(record.responseCode);
     setResponse(getResponseText(record.responseBody));
     setStatus('已回显历史记录；如需一键重发，请确认 Password 与明文 Payload 后点击发送');
+  }
+
+  function handleDragStart(event: DragStartEvent) {
+    const activeId = event.active.id as string;
+    const found = findEndpoint(presets, activeId);
+    if (found) {
+      setActiveEndpointId(activeId);
+    } else {
+      setActiveProjectId(activeId);
+    }
+  }
+
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+    setActiveProjectId(null);
+    setActiveEndpointId(null);
+
+    if (!over || active.id === over.id) return;
+
+    const activeId = active.id as string;
+    const overId = over.id as string;
+
+    const isEndpoint = presets.some(p => p.type === 'project' && p.children.some(e => e.id === activeId));
+
+    if (isEndpoint) {
+      const projectWithActive = presets.find(p => p.type === 'project' && p.children.some(e => e.id === activeId));
+      const projectWithOver = presets.find(p => p.type === 'project' && p.children.some(e => e.id === overId));
+
+      if (projectWithActive && projectWithOver && projectWithActive.id === projectWithOver.id) {
+        const next = presets.map(p => {
+          if (p.type !== 'project' || p.id !== projectWithActive.id) return p;
+          const oldIndex = p.children.findIndex(e => e.id === activeId);
+          const newIndex = p.children.findIndex(e => e.id === overId);
+          return { ...p, children: arrayMove(p.children, oldIndex, newIndex) };
+        });
+        persistPresets(next);
+      }
+    } else {
+      const oldIndex = presets.findIndex(p => p.id === activeId);
+      const newIndex = presets.findIndex(p => p.id === overId);
+      if (oldIndex !== -1 && newIndex !== -1) {
+        persistPresets(arrayMove(presets, oldIndex, newIndex));
+      }
+    }
+  }
+
+  function handleRename(id: string, newName: string) {
+    const next = presets.map((project) => {
+      if (project.id === id && project.type === 'project') {
+        return { ...project, name: newName };
+      }
+      if (project.type === 'project') {
+        return {
+          ...project,
+          children: project.children.map((endpoint) =>
+            endpoint.id === id ? { ...endpoint, name: newName } : endpoint
+          )
+        };
+      }
+      return project;
+    });
+    persistPresets(next);
+    setStatus(`已重命名为「${newName}」`);
   }
 
   return (
@@ -511,43 +806,57 @@ export default function Home() {
               
               {filteredPresets.length === 0 && <p className="py-8 text-center text-xs text-slate-500 dark:text-slate-500">空空如也</p>}
               
-              <div className="space-y-3">
-                {filteredPresets.map((project) => project.type === 'project' && (
-                  <section key={project.id} className="rounded-xl border border-slate-200/80 bg-white shadow-sm dark:border-white/5 dark:bg-[#161f30]">
-                    <div className="flex items-center justify-between border-b border-slate-100 px-3 py-2.5 dark:border-white/5">
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <Folder size={14} className="shrink-0 text-indigo-500 dark:text-indigo-400" />
-                        <span className="truncate text-[13px] font-semibold text-slate-700 dark:text-slate-200">{project.name}</span>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition-opacity hover:opacity-100">
-                        <button className="rounded p-1.5 hover:bg-slate-100 hover:text-indigo-600 dark:hover:bg-white/10 dark:hover:text-indigo-400" onClick={() => addEndpoint(project.id)} title="添加预设"><Plus size={14} /></button>
-                        <button className="rounded p-1.5 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-400" onClick={() => requestDeleteProject(project.id)} title="删除项目"><Trash2 size={14} /></button>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragStart={handleDragStart}
+                onDragEnd={handleDragEnd}
+              >
+                <SortableContext items={filteredPresets.map(p => p.id)} strategy={verticalListSortingStrategy}>
+                  <div className="space-y-3">
+                    {filteredPresets.map((project) => project.type === 'project' && (
+                      <SortableProject
+                        key={project.id}
+                        project={project}
+                        selectedEndpointId={selectedEndpointId}
+                        onSelectEndpoint={(endpoint) => { setSelectedEndpointId(endpoint.id); setForm(endpointToForm(endpoint)); }}
+                        onAddEndpoint={addEndpoint}
+                        onRequestDeleteProject={requestDeleteProject}
+                        onRequestDeleteEndpoint={requestDeleteEndpoint}
+                        onReorderEndpoints={() => {}}
+                        isDraggingEndpoint={activeEndpointId}
+                        onRenameProject={handleRename}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+                <DragOverlay>
+                  {activeProjectId ? (
+                    <div className="rounded-xl border border-indigo-500 bg-white px-3 py-2.5 shadow-xl dark:bg-[#161f30]">
+                      <div className="flex items-center gap-2.5">
+                        <GripVertical size={14} className="text-slate-400" />
+                        <Folder size={14} className="text-indigo-500 dark:text-indigo-400" />
+                        <span className="text-[13px] font-semibold text-slate-700 dark:text-slate-200">
+                          {presets.find(p => p.id === activeProjectId)?.name}
+                        </span>
                       </div>
                     </div>
-                    <div className="p-1.5 space-y-0.5">
-                      {project.children.map((endpoint) => (
-                        <div 
-                          key={endpoint.id} 
-                          className={clsx(
-                            'group flex items-center justify-between rounded-lg px-2.5 py-2 text-[13px] transition-colors', 
-                            selectedEndpointId === endpoint.id 
-                              ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300' 
-                              : 'text-slate-600 hover:bg-slate-50 dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-slate-200'
-                          )}
-                        >
-                          <button className="flex min-w-0 flex-1 items-center gap-2.5 text-left outline-none" onClick={() => { setSelectedEndpointId(endpoint.id); setForm(endpointToForm(endpoint)); }}>
-                            <FileJson size={13} className={clsx("shrink-0", selectedEndpointId === endpoint.id ? "text-indigo-500" : "text-slate-400")} />
-                            <span className="truncate font-medium">{endpoint.name}</span>
-                          </button>
-                          <button className="shrink-0 p-1 text-slate-400 opacity-0 transition-all hover:text-red-500 group-hover:opacity-100" onClick={() => requestDeleteEndpoint(endpoint.id)} title="删除">
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      ))}
+                  ) : activeEndpointId ? (
+                    <div className="rounded-lg bg-indigo-50 px-2.5 py-2 shadow-xl dark:bg-indigo-500/15">
+                      <div className="flex items-center gap-2.5">
+                        <GripVertical size={12} className="text-slate-400" />
+                        <FileJson size={13} className="text-indigo-500" />
+                        <span className="text-[13px] font-medium text-indigo-700 dark:text-indigo-300">
+                          {(() => {
+                            const found = findEndpoint(presets, activeEndpointId);
+                            return found?.endpoint.name;
+                          })()}
+                        </span>
+                      </div>
                     </div>
-                  </section>
-                ))}
-              </div>
+                  ) : null}
+                </DragOverlay>
+              </DndContext>
             </div>
           ) : (
             <div className="space-y-2.5">
@@ -616,7 +925,7 @@ export default function Home() {
                   className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-600 transition-all hover:bg-slate-50 hover:text-indigo-600 dark:border-white/10 dark:bg-black/20 dark:text-slate-300 dark:hover:bg-white/5 dark:hover:text-indigo-400" 
                   onClick={saveCurrentPreset}
                 >
-                  <Save size={13} /> 保存至预设
+                  <Save size={13} /> 保存
                 </button>
               </div>
               <div className="grid grid-cols-2 gap-5 p-5">
