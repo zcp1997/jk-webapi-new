@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Intel+One+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -59,4 +61,15 @@ button {
 }
 .custom-scrollbar::-webkit-scrollbar-track {
   background: transparent;
+}
+
+.stable-scrollbar {
+  scrollbar-gutter: stable;
+}
+
+.payload-json-editor {
+  font-family: "Intel One Mono", "Google Sans Mono", "Cascadia Mono", "JetBrains Mono", Consolas, monospace !important;
+  font-feature-settings: "liga" 0, "calt" 0;
+  font-variant-ligatures: none;
+  letter-spacing: 0.005em;
 }

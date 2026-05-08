@@ -98,6 +98,7 @@ function EditableText({ value, onSave, className, inputClassName, placeholder }:
 }
 
 type SidebarTab = 'presets' | 'history';
+type HistoryStatusFilter = 'all' | 'success' | 'failed';
 type CreateDialogState =
   | { type: 'project'; title: string; label: string; defaultName: string }
   | { type: 'endpoint'; projectId: string; title: string; label: string; defaultName: string };
@@ -182,7 +183,7 @@ function getResponseText(body: string): string {
   return prettyJson(decoded ?? (body || ''));
 }
 
-const REQUEST_TIMEOUT_MS = 10000;
+const REQUEST_TIMEOUT_MS = 30000;
 
 async function tauriAwareFetch(url: string, init: RequestInit, timeoutMs: number = REQUEST_TIMEOUT_MS): Promise<Response> {
   const isTauriEnv = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
@@ -329,6 +330,8 @@ export default function Home() {
   const [showBase64Preview, setShowBase64Preview] = useState(false);
   const [truncateDataField, setTruncateDataField] = useState(true);
   const [presetQuery, setPresetQuery] = useState('');
+  const [historyQuery, setHistoryQuery] = useState('');
+  const [historyStatusFilter, setHistoryStatusFilter] = useState<HistoryStatusFilter>('all');
   const [createDialog, setCreateDialog] = useState<CreateDialogState | null>(null);
   const [createName, setCreateName] = useState('');
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState | null>(null);
@@ -388,6 +391,29 @@ export default function Home() {
       })
       .filter((project) => project.type !== 'project' || project.children.length > 0 || `${project.name} ${project.description ?? ''}`.toLowerCase().includes(keyword));
   }, [presetQuery, presets]);
+
+  const filteredHistory = useMemo(() => {
+    const keyword = historyQuery.trim().toLowerCase();
+
+    return history.filter((record) => {
+      const isSuccess = record.responseCode !== null && record.responseCode >= 200 && record.responseCode < 300;
+      if (historyStatusFilter === 'success' && !isSuccess) return false;
+      if (historyStatusFilter === 'failed' && isSuccess) return false;
+      if (!keyword) return true;
+
+      const payloadJson = decodeBase64Utf8(record.requestData.data) ?? '';
+      return [
+        record.presetName,
+        record.url,
+        record.requestData.appkey,
+        record.requestData.ver,
+        payloadJson
+      ]
+        .join(' ')
+        .toLowerCase()
+        .includes(keyword);
+    });
+  }, [history, historyQuery, historyStatusFilter]);
 
   const totalEndpointCount = useMemo(
     () => presets.reduce((count, project) => count + (project.type === 'project' ? project.children.length : 0), 0),
@@ -679,16 +705,18 @@ export default function Home() {
   }
 
   function loadHistory(record: HistoryRecord) {
+    const payloadJson = decodeBase64Utf8(record.requestData.data);
     setForm((prev) => ({
       ...prev,
       url: record.url,
       appkey: record.requestData.appkey,
-      ver: record.requestData.ver
+      ver: record.requestData.ver,
+      data: payloadJson ?? prev.data
     }));
     setGenerated(record.requestData);
     setResponseCode(record.responseCode);
     setResponse(getResponseText(record.responseBody));
-    setStatus('已回显历史记录；如需一键重发，请确认 Password 与明文 Payload 后点击发送');
+    setStatus(payloadJson === null ? '已回显历史记录，但 Payload 解析失败；请手动确认明文 Payload' : '已回显历史记录；如需一键重发，请确认 Password 后点击发送');
   }
 
   function handleDragStart(event: DragStartEvent) {
@@ -796,7 +824,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto px-4 pb-4 custom-scrollbar">
+        <div className="stable-scrollbar min-h-0 flex-1 overflow-y-scroll px-4 pb-4 custom-scrollbar">
           {tab === 'presets' ? (
             <div className="space-y-4">
               <div className="relative flex items-center">
@@ -880,9 +908,52 @@ export default function Home() {
               </DndContext>
             </div>
           ) : (
-            <div className="space-y-2.5">
+            <div className="w-full space-y-3">
+              <div className="w-full space-y-2.5">
+                <div className="relative flex items-center">
+                  <input
+                    className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-3 pr-9 text-[13px] text-slate-900 shadow-sm outline-none transition-all placeholder:text-slate-400 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-white/10 dark:bg-black/20 dark:text-slate-200 dark:focus:border-indigo-500/50"
+                    value={historyQuery}
+                    onChange={(event) => setHistoryQuery(event.target.value)}
+                    placeholder="搜索标题 / URL / JSON"
+                  />
+
+                  {historyQuery && (
+                    <button
+                      className="absolute right-2.5 flex h-5 w-5 items-center justify-center rounded-full text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-white/10 dark:hover:text-slate-300"
+                      onClick={() => setHistoryQuery('')}
+                      title="清空搜索"
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid w-full grid-cols-3 gap-1 rounded-lg border border-slate-200/50 bg-slate-100/80 p-1 dark:border-white/5 dark:bg-black/40">
+                  {[
+                    { value: 'all', label: '全部' },
+                    { value: 'success', label: '成功' },
+                    { value: 'failed', label: '失败' }
+                  ].map((item) => (
+                    <button
+                      key={item.value}
+                      className={clsx(
+                        'rounded-md px-2 py-1.5 text-xs font-medium transition-all duration-200',
+                        historyStatusFilter === item.value
+                          ? 'bg-white text-slate-900 shadow-sm dark:bg-[#1f2937] dark:text-white'
+                          : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+                      )}
+                      onClick={() => setHistoryStatusFilter(item.value as HistoryStatusFilter)}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {history.length === 0 && <p className="py-8 text-center text-xs text-slate-500">暂无历史记录</p>}
-              {history.map((record) => (
+              {history.length > 0 && filteredHistory.length === 0 && <p className="py-8 text-center text-xs text-slate-500">没有匹配的历史记录</p>}
+              {filteredHistory.map((record) => (
                 <button 
                   key={record.id} 
                   className="w-full rounded-xl border border-slate-200 bg-white p-3.5 text-left shadow-sm transition-all hover:border-indigo-300 hover:shadow-md dark:border-white/5 dark:bg-[#161f30] dark:hover:border-indigo-500/50" 
@@ -977,7 +1048,7 @@ export default function Home() {
                 <button className="text-[12px] font-semibold text-indigo-600 transition-colors hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300" onClick={formatPayload}>格式化 (Prettier)</button>
               </div>
               <textarea 
-                className="min-h-0 flex-1 resize-none bg-slate-50/50 p-5 font-mono text-[13px] leading-relaxed text-slate-800 outline-none transition-colors focus:bg-white dark:bg-[#0b0f18]/50 dark:text-slate-300 dark:focus:bg-[#0b0f18] rounded-b-2xl" 
+                className="payload-json-editor min-h-0 flex-1 resize-none bg-slate-50/50 p-5 text-[13px] leading-relaxed text-slate-800 outline-none transition-colors focus:bg-white dark:bg-[#0b0f18]/50 dark:text-slate-300 dark:focus:bg-[#0b0f18] rounded-b-2xl" 
                 value={form.data} 
                 onChange={(event) => updateForm('data', event.target.value)} 
                 spellCheck={false} 
